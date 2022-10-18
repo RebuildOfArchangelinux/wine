@@ -39,6 +39,7 @@
 #include "viewporter-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "wp-fractional-scale-v1-client-protocol.h"
 
 #include "windef.h"
 #include "winbase.h"
@@ -79,6 +80,7 @@ enum wayland_window_message
     WM_WAYLAND_REMOTE_SURFACE,
     WM_WAYLAND_POINTER_CONFINEMENT_UPDATE,
     WM_WAYLAND_CLIPBOARD_WINDOW_CREATE,
+    WM_WAYLAND_UPDATE_CURSOR,
 };
 
 enum wayland_surface_role
@@ -278,6 +280,7 @@ struct wayland
     struct zwp_pointer_constraints_v1 *zwp_pointer_constraints_v1;
     struct zwp_relative_pointer_manager_v1 *zwp_relative_pointer_manager_v1;
     struct zxdg_output_manager_v1 *zxdg_output_manager_v1;
+    struct wp_fractional_scale_manager_v1 *wp_fractional_scale_manager_v1;
     uint32_t next_fallback_output_id;
     struct wl_list output_list;
     struct wl_list detached_shm_buffer_list;
@@ -355,6 +358,7 @@ struct wayland_surface
     struct wayland_dmabuf_surface_feedback *surface_feedback;
     struct zwp_confined_pointer_v1 *zwp_confined_pointer_v1;
     struct zwp_locked_pointer_v1 *zwp_locked_pointer_v1;
+    struct wp_fractional_scale_v1 *wp_fractional_scale_v1;
     /* The offset of this surface relative to its owning win32 window */
     int offset_x, offset_y;
     HWND hwnd;
@@ -369,6 +373,7 @@ struct wayland_surface
     struct wayland_output *wine_output;
     BOOL drawing_allowed;
     struct wl_list child_list;
+    double fractional_scale;
 };
 
 struct wayland_native_buffer
@@ -843,6 +848,7 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
                                RECT *visible_rect, struct window_surface **surface) DECLSPEC_HIDDEN;
 const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version) DECLSPEC_HIDDEN;
 struct opengl_funcs *WAYLAND_wine_get_wgl_driver(UINT version) DECLSPEC_HIDDEN;
+void queue_update_wayland_state(HWND hwnd, struct window_surface *surface);
 
 /**********************************************************************
  *          GDI driver functions

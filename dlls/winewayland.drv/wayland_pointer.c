@@ -110,6 +110,7 @@ static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
     if (wayland_surface && wayland_surface->hwnd &&
         wayland_surface->wayland == wayland)
     {
+        printf("Received pointer_enter\n");
         TRACE("surface=%p hwnd=%p\n", wayland_surface, wayland_surface->hwnd);
         wayland->pointer.focused_surface = wayland_surface;
         wayland->pointer.enter_serial = serial;
@@ -120,10 +121,11 @@ static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
          * directly calling our driver function, so that the per-thread cursor
          * visibility state (i.e., ShowCursor()), which is difficult to access
          * otherwise, is taken into account. */
-        NtUserSetCursor(NtUserGetCursor());
+        // NtUserSetCursor(NtUserGetCursor());
+        send_message(wayland_surface->hwnd, WM_WAYLAND_UPDATE_CURSOR, 0, 0);
         /* Reapply the current cursor clip, so that wayland pointer confinement
          * decisions is triggered for the newly entered window. */
-        NtUserClipCursor(NtUserGetClipCursor(&clip) ? &clip : NULL);
+        // NtUserClipCursor(NtUserGetClipCursor(&clip) ? &clip : NULL);
         /* Handle the enter as a motion, to account for cases where the
          * window first appears beneath the pointer and won't get a separate
          * motion event. */

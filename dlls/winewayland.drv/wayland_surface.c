@@ -123,6 +123,7 @@ static void handle_xdg_toplevel_configure(void *data,
         }
     }
 
+    printf("Received XDG_toplevel_configure %d,%d\n", width, height);
     surface->pending.width = width;
     surface->pending.height = height;
     surface->pending.configure_flags = flags;
@@ -138,6 +139,29 @@ static void handle_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_tople
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
     handle_xdg_toplevel_configure,
     handle_xdg_toplevel_close,
+};
+
+static void handle_wp_fractional_scale_v1_preferred_scale(
+        void *data,
+        struct wp_fractional_scale_v1 *wp_fractional_scale_v1,
+        wl_fixed_t scale) {
+    struct wayland_surface *surface = data;
+    surface->fractional_scale = wl_fixed_to_double(scale);
+    printf("preferred_scale Handler %lf\n", surface->fractional_scale);
+    if (surface->main_output != NULL)
+    {
+        int original_scale = wayland_surface_get_buffer_scale(surface);
+        if (surface->hwnd) {
+            printf("preferred_scale Handler sending output change\n");
+            // send_message(surface->hwnd, WM_WAYLAND_SURFACE_OUTPUT_CHANGE,
+            //     original_scale, 0);
+            queue_update_wayland_state(surface->hwnd, NULL);
+        }
+    }
+}
+
+static const struct wp_fractional_scale_v1_listener wp_fractional_scale_v1_listener = {
+    handle_wp_fractional_scale_v1_preferred_scale,
 };
 
 static struct wayland_output *wayland_surface_get_origin_output(
@@ -180,6 +204,7 @@ static void handle_wl_surface_enter(void *data,
     wl_list_insert(&surface->output_ref_list, &ref->link);
 
     origin = wayland_surface_get_origin_output(surface);
+    printf("Received wl_surface_enter, set main output %d %d\n", origin->scale, output->scale);
     wayland_surface_set_main_output(surface, origin);
 }
 
@@ -236,6 +261,16 @@ struct wayland_surface *wayland_surface_create_plain(struct wayland *wayland)
             wp_viewporter_get_viewport(surface->wayland->wp_viewporter,
                                        surface->wl_surface);
     }
+    if (surface->wayland->wp_fractional_scale_manager_v1)
+    {
+        surface->wp_fractional_scale_v1 =
+            wp_fractional_scale_manager_v1_get_fractional_scale(
+                surface->wayland->wp_fractional_scale_manager_v1,
+                surface->wl_surface);
+        wp_fractional_scale_v1_add_listener(surface->wp_fractional_scale_v1,
+            &wp_fractional_scale_v1_listener, surface);
+    }
+    surface->fractional_scale = 1.;
 
     wl_list_init(&surface->output_ref_list);
     wl_list_init(&surface->link);
@@ -485,6 +520,7 @@ void wayland_surface_reconfigure_geometry(struct wayland_surface *surface,
                 height = surface->current.height;
         }
 
+        printf("Sending Set Window Geometry %d,%d %d,%d, Output scale %d\n", wine_width, wine_height, width, height, surface->main_output ? surface->main_output->scale : 0);
         xdg_surface_set_window_geometry(surface->xdg_surface, x, y, width, height);
     }
 }
@@ -636,6 +672,13 @@ BOOL wayland_surface_commit_buffer(struct wayland_surface *surface,
 
         for (;rgn_rect < rgn_rect_end; rgn_rect++)
         {
+            // printf("Damaging %d %d %d %d\n", rgn_rect->left, rgn_rect->top, rgn_rect->right - rgn_rect->left, rgn_rect->bottom - rgn_rect->top);
+            // wl_surface_damage_buffer(surface->wl_surface,
+            //                          0, 0, INT32_MAX, INT32_MAX);
+            // wl_surface_damage_buffer(surface->wl_surface,
+            //                          0, 0,
+            //                          (rgn_rect->right - rgn_rect->left) * 2,
+            //                          (rgn_rect->bottom - rgn_rect->top) * 2);
             wl_surface_damage_buffer(surface->wl_surface,
                                      rgn_rect->left, rgn_rect->top,
                                      rgn_rect->right - rgn_rect->left,
@@ -711,6 +754,12 @@ void wayland_surface_destroy(struct wayland_surface *surface)
     {
         zwp_confined_pointer_v1_destroy(surface->zwp_confined_pointer_v1);
         surface->zwp_confined_pointer_v1 = NULL;
+    }
+
+    if (surface->wp_fractional_scale_v1)
+    {
+        wp_fractional_scale_v1_destroy(surface->wp_fractional_scale_v1);
+        surface->wp_fractional_scale_v1 = NULL;
     }
 
     if (surface->wp_viewport)
@@ -1062,13 +1111,13 @@ void wayland_surface_coords_from_wine(struct wayland_surface *surface,
 
     if (output)
     {
-        *wayland_x = wine_x * output->wine_scale / scale;
-        *wayland_y = wine_y * output->wine_scale / scale;
+        *wayland_x = wine_x * output->wine_scale / scale / surface->fractional_scale;
+        *wayland_y = wine_y * output->wine_scale / scale / surface->fractional_scale;
     }
     else
     {
-        *wayland_x = wine_x / (double)scale;
-        *wayland_y = wine_y / (double)scale;
+        *wayland_x = wine_x / (double)scale / surface->fractional_scale;
+        *wayland_y = wine_y / (double)scale / surface->fractional_scale;
     }
 
     TRACE("hwnd=%p wine_scale=%f wine=%d,%d => wayland=%.2f,%.2f\n",
@@ -1106,13 +1155,13 @@ void wayland_surface_coords_to_wine(struct wayland_surface *surface,
 
     if (output)
     {
-        *wine_x = round(wayland_x * scale / output->wine_scale);
-        *wine_y = round(wayland_y * scale / output->wine_scale);
+        *wine_x = round(wayland_x * scale * surface->fractional_scale / output->wine_scale);
+        *wine_y = round(wayland_y * scale * surface->fractional_scale / output->wine_scale);
     }
     else
     {
-        *wine_x = round(wayland_x * scale);
-        *wine_y = round(wayland_y * scale);
+        *wine_x = round(wayland_x * scale * surface->fractional_scale);
+        *wine_y = round(wayland_y * scale * surface->fractional_scale);
     }
 
     TRACE("hwnd=%p wine_scale=%f wayland=%.2f,%.2f => wine=%d,%d\n",
@@ -1406,6 +1455,7 @@ void wayland_surface_update_pointer_confinement(struct wayland_surface *surface)
         wl_region_add(region, round(left), round(top),
                       round(right - left), round(bottom - top));
 
+        printf("Confining pointer to %d %d %d %d\n", (int)left, (int)top, (int)(right - left), (int)(bottom - top));
         if (!surface->zwp_confined_pointer_v1)
         {
             surface->zwp_confined_pointer_v1 =
@@ -1426,6 +1476,7 @@ void wayland_surface_update_pointer_confinement(struct wayland_surface *surface)
     }
     else if (needs_lock)
     {
+        printf("Locking pointer\n");
         if (!surface->zwp_locked_pointer_v1)
         {
             surface->zwp_locked_pointer_v1 =
@@ -1460,7 +1511,8 @@ static void wayland_surface_tree_set_main_output_and_scale(struct wayland_surfac
     struct wayland_surface *child;
 
     surface->main_output = output;
-    wl_surface_set_buffer_scale(surface->wl_surface, scale);
+    wl_surface_set_buffer_scale(surface->wl_surface,
+        wayland_surface_get_buffer_scale(surface));
 
     wayland_mutex_lock(&surface->mutex);
 
@@ -1489,10 +1541,12 @@ static void wayland_surface_set_main_output(struct wayland_surface *surface,
 
     if (surface->main_output != output)
     {
+        int original_scale = wayland_surface_get_buffer_scale(surface);
         wayland_surface_tree_set_main_output_and_scale(surface, output,
                                                        output ? output->scale : 1);
         if (surface->hwnd)
-            send_message(surface->hwnd, WM_WAYLAND_SURFACE_OUTPUT_CHANGE, 0, 0);
+            send_message(surface->hwnd, WM_WAYLAND_SURFACE_OUTPUT_CHANGE,
+                original_scale, 0);
     }
 }
 
@@ -1575,6 +1629,9 @@ int wayland_surface_get_buffer_scale(struct wayland_surface *surface)
     struct wayland_surface *toplevel = surface;
     struct wayland_output *output;
     int scale = 1;
+
+    if (surface->wp_fractional_scale_v1 != NULL)
+        return 1;
 
     while (toplevel->parent) toplevel = toplevel->parent;
 

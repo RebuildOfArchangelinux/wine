@@ -192,6 +192,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         wayland->zwp_relative_pointer_manager_v1 =
             wl_registry_bind(registry, id, &zwp_relative_pointer_manager_v1_interface, 1);
     }
+    else if (strcmp(interface, "wp_fractional_scale_manager_v1") == 0)
+    {
+        wayland->wp_fractional_scale_manager_v1 =
+            wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
+    }
 }
 
 static void registry_handle_global_remove(void *data, struct wl_registry *registry,
@@ -390,6 +395,9 @@ void wayland_deinit(struct wayland *wayland)
 
     if (wayland->zwp_relative_pointer_manager_v1)
         zwp_relative_pointer_manager_v1_destroy(wayland->zwp_relative_pointer_manager_v1);
+
+    if (wayland->wp_fractional_scale_manager_v1)
+        wp_fractional_scale_manager_v1_destroy(wayland->wp_fractional_scale_manager_v1);
 
     if (wayland->wp_viewporter)
         wp_viewporter_destroy(wayland->wp_viewporter);

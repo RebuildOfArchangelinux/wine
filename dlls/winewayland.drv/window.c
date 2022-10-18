@@ -1022,6 +1022,7 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
     if (!(flags & LWA_COLORKEY)) color_key = CLR_INVALID;
     if (!(flags & LWA_ALPHA)) alpha = 255;
 
+    printf("Received WindowPosChanging %d %d\n", surface_rect.right - surface_rect.left, surface_rect.bottom - surface_rect.top);
     *surface = wayland_window_surface_create(data->hwnd, &surface_rect, color_key, alpha, FALSE);
 
 done:
@@ -1040,6 +1041,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, UINT swp_flags,
     struct wayland_win_data *data;
 
     if (!(data = wayland_win_data_get(hwnd))) return;
+    printf("Received WindowPosChanged\n");
 
     TRACE("hwnd %p window %s client %s visible %s style %08x after %p flags %08x\n",
           hwnd, wine_dbgstr_rect(window_rect), wine_dbgstr_rect(client_rect),
@@ -1051,6 +1053,37 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, UINT swp_flags,
         window_surface_release(data->pending_window_surface);
     data->pending_window_surface = surface;
     data->has_pending_window_surface = TRUE;
+
+    /* In some cases, notably when the app calls UpdateLayeredWindow, position
+     * and size changes may be emitted from a thread other than the window
+     * thread. Since in the current implementation updating the wayland state
+     * needs to happen in the context of the window thread to avoid racy
+     * interactions, post a message to update the state in the right thread. */
+    if (GetCurrentThreadId() == NtUserGetWindowThread(hwnd, NULL))
+    {
+        data = update_wayland_state(data);
+    }
+    else if (!data->pending_state_update_message)
+    {
+        NtUserPostMessage(hwnd, WM_WAYLAND_STATE_UPDATE, 0, 0);
+        data->pending_state_update_message = TRUE;
+    }
+
+    wayland_win_data_release(data);
+}
+
+void queue_update_wayland_state(HWND hwnd, struct window_surface *surface)
+{
+    struct wayland_win_data *data;
+
+    if (!(data = wayland_win_data_get(hwnd))) return;
+    // printf("Received WindowPosChanged\n");
+
+    // if (surface) window_surface_add_ref(surface);
+    // if (data->has_pending_window_surface && data->pending_window_surface)
+    //     window_surface_release(data->pending_window_surface);
+    // data->pending_window_surface = surface;
+    // data->has_pending_window_surface = TRUE;
 
     /* In some cases, notably when the app calls UpdateLayeredWindow, position
      * and size changes may be emitted from a thread other than the window
@@ -1333,6 +1366,7 @@ static void handle_wm_wayland_monitor_change(struct wayland *wayland)
         struct wayland_win_data *data = wayland_win_data_get(surface->hwnd);
         if (data)
         {
+            printf("Updaing Wayland State from monitor change\n");
             update_wayland_state(data);
             wayland_win_data_release(data);
         }
@@ -1494,6 +1528,7 @@ static LRESULT handle_wm_wayland_configure(HWND hwnd)
     if (flags & (WAYLAND_CONFIGURE_FLAG_MAXIMIZED|WAYLAND_CONFIGURE_FLAG_FULLSCREEN))
         swp_flags |= SWP_NOSENDCHANGING;
 
+    printf("XDG_surface_configure Handler Send SetWindowPos %d %d\n", wine_width, wine_height);
     NtUserSetWindowPos(hwnd, 0, origin_x, origin_y, wine_width, wine_height, swp_flags);
 
     if ((data = wayland_win_data_get(hwnd)))
@@ -1512,11 +1547,12 @@ static void CALLBACK post_configure(HWND hwnd, UINT msg, UINT_PTR timer_id, DWOR
     handle_wm_wayland_configure(hwnd);
 }
 
-static void handle_wm_wayland_surface_output_change(HWND hwnd)
+static void handle_wm_wayland_surface_output_change(HWND hwnd, UINT original_scale)
 {
     struct wayland_surface *wsurface;
     int x, y, w, h;
     UINT swp_flags;
+    int new_scale;
 
     TRACE("hwnd=%p\n", hwnd);
 
@@ -1542,6 +1578,8 @@ static void handle_wm_wayland_surface_output_change(HWND hwnd)
         swp_flags |= SWP_NOMOVE;
     }
 
+    new_scale = wayland_surface_get_buffer_scale(wsurface);
+    printf("Output change handler scale %d %d\n", original_scale, new_scale);
     /* If we are fullscreen or maximized we need to provide a particular buffer
      * size to the wayland compositor on the new output (hence swp_flags
      * includes SWP_NOSENDCHANGING). */
@@ -1561,12 +1599,21 @@ static void handle_wm_wayland_surface_output_change(HWND hwnd)
                                                  &w, &h);
         TRACE("resizing window to fullscreen %dx%d\n", w, h);
     }
-    else
+    else if (original_scale == new_scale)
     {
         w = h = 0;
         swp_flags |= SWP_NOSIZE;
+    } else
+    {
+        w = h = 0;
+        swp_flags |= SWP_NOSIZE;
+        // printf("Output change Handler Changing scale %d => %d %d,%d\n", original_scale, new_scale,
+        //     wsurface->current.width, wsurface->current.height);
+        // w = ((double) wsurface->current.width) / original_scale * new_scale;
+        // h = ((double) wsurface->current.height) / original_scale * new_scale;
     }
 
+    printf("Output change Handler Send SetWindowPos %d,%d\n", w, h);
     NtUserSetWindowPos(hwnd, 0, x, y, w, h, swp_flags);
 
 out:
@@ -1597,6 +1644,10 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_WAYLAND_SET_CURSOR:
         wayland_pointer_update_cursor_from_win32(&thread_wayland()->pointer,
                                                  (HCURSOR)lp);
+        break;
+    case WM_WAYLAND_UPDATE_CURSOR:
+        wayland_pointer_update_cursor_from_win32(&thread_wayland()->pointer,
+                                                 NtUserGetCursor());
         break;
     case WM_WAYLAND_QUERY_SURFACE_MAPPED:
         {
@@ -1649,7 +1700,7 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_WAYLAND_SURFACE_OUTPUT_CHANGE:
-        handle_wm_wayland_surface_output_change(hwnd);
+        handle_wm_wayland_surface_output_change(hwnd, wp);
         break;
     case WM_WAYLAND_WINDOW_SURFACE_FLUSH:
         {

@@ -568,6 +568,7 @@ void wayland_pointer_update_cursor_from_win32(struct wayland_pointer *pointer,
                                               HCURSOR handle)
 {
     struct wayland_cursor *wayland_cursor = pointer->cursor;
+    printf("update_cursor_from_win32 %p %p %p %p\n", pointer, pointer ? pointer->hcursor : 0, handle, pointer ? pointer->cursor : 0);
 
     TRACE("pointer=%p pointer->hcursor=%p handle=%p\n",
           pointer, pointer ? pointer->hcursor : 0, handle);
@@ -592,6 +593,7 @@ void wayland_pointer_update_cursor_from_win32(struct wayland_pointer *pointer,
 
     if (!pointer->cursor)
     {
+            printf("Setting cursor to null\n");
             wl_pointer_set_cursor(pointer->wl_pointer,
                                   pointer->enter_serial,
                                   NULL, 0, 0);
@@ -609,6 +611,7 @@ void wayland_pointer_update_cursor_from_win32(struct wayland_pointer *pointer,
 
     wl_surface_commit(pointer->cursor_wl_surface);
 
+    printf("Sending wl_pointer_set_cursor\n");
     wl_pointer_set_cursor(pointer->wl_pointer,
                           pointer->enter_serial,
                           pointer->cursor_wl_surface,
@@ -654,6 +657,7 @@ static HWND wayland_get_thread_cursor_hwnd(void)
 {
     struct wayland *wayland = thread_wayland();
     HWND cursor_hwnd;
+    printf("Thread Cursor %p\n", wayland->pointer.focused_surface);
 
     if (wayland && wayland->pointer.focused_surface)
         cursor_hwnd = wayland->pointer.focused_surface->hwnd;
@@ -668,6 +672,7 @@ static HWND wayland_get_thread_cursor_hwnd(void)
  */
 void WAYLAND_SetCursor(HCURSOR hcursor)
 {
+    printf("Received SetCursor\n");
     HWND cursor_hwnd = wayland_get_thread_cursor_hwnd();
 
     TRACE("hcursor=%p last_cursor=%p cursor_hwnd=%p\n",
